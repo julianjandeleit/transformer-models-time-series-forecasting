@@ -1,2 +1,5 @@
 torch==2.0.1+cu117
 numpy==1.24.1
+pandas
+matplotlib
+ipympl
