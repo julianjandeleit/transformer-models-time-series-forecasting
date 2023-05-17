@@ -1,7 +1,7 @@
 import pandas as pd
 import pathlib as pl
 
-def load_data(DATA_PATH = "../data/"):
+def load_data(DATA_PATH = "../data/raw"):
     def read_data(subdir: str):
         data = [x for x in (pl.Path(DATA_PATH)/subdir).iterdir() if x.suffix == ".csv"]
         data = [pd.read_csv(d) for d in data]
