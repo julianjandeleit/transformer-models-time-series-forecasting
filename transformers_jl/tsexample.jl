@@ -71,7 +71,7 @@ begin
 	input_size=16 # sequence length!
 	decoder_input_size = 8 # seq len!
 	num_layer = 8
-	hidden_size = 32#128 # encoding of encoder
+	hidden_size = 128 # encoding of encoder
 	num_head = 8
 	head_hidden_size = div(hidden_size, num_head)
 	intermediate_size = 4hidden_size
@@ -158,7 +158,7 @@ function normalize(data)
 end
 #generate_seq(sincurve1,enc_seq_len+output_sequence_length)
 ta = readtimearray("data/preprocessed/timeseries.csv", format="yyyy-mm-dd HH:MM:SS", delim=',')
-ta_mv = moving(mean,ta,15)
+ta_mv = moving(mean,ta,75)
 ground_truth_curve = [ta_mv...] .|> x->x[2][1]
 ground_truth_curve = normalize(ground_truth_curve)
 
@@ -181,6 +181,8 @@ testdata = data[:,thd+1:end]
 data = data[:,1:thd]
 
 ## Training
+best_layers = []
+best_loss = 1e10
 begin
 	ps = Flux.params(encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear)
 	all_layers = [ encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear ]
@@ -189,7 +191,7 @@ begin
 	@info "start training"
 	start_time = time()
 	l = 100
-	for i = 1:10 # num epochs (was 1000)
+	for i = 1:5 # num epochs (was 1000)
 		for x in train_loader
 			sz = size(x)
 			sub_sequence = reshape(x,(1,sz[1],sz[2]))
@@ -208,11 +210,16 @@ begin
 			grad = gradient(()->loss(src, trg, trg_y), ps)
 			Flux.update!(opt, ps, grad)
 			global l = collect(loss(src, trg, trg_y))[1]
+			if l < best_loss
+				@info "best loss" l
+				global best_loss = l
+				global best_layers = all_layers |> deepcopy
+			end
 		    if l < 1e-3
 				continue
 			end
 		end
-		if i % 10 == 0		
+		if i % 1 == 0		
 			# for (j,layer) in enumerate(all_layers)
 			# 	@save joinpath("tensorboard_logs","model-"*string(j)*".bson") layer
 			# end
@@ -228,6 +235,8 @@ begin
 	end
 end
 ## Test predictions
+
+encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear = best_layers
 
 function predict(test_data)
     seq = Array{Float32}[]
@@ -246,19 +255,54 @@ function predict(test_data)
 end
 
 
-
-res = predict(testdata)
-plot(res)
-plot!(ground_truth_curve)
-
+begin
+	dataseq = data[1:24:end,:]'
+	testdataseq = testdata[1:24:end,:]'
+	res_train = predict(data)
+	res_test = predict(testdata)
+	#plot(ground_truth_curve;label="ground truth")
+	plot(res_train, label="train prediction", linewidth=2)
+	plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), res_test;label="test prediction",linewidth=2)
+	plot!(dataseq;label="training data")
+	plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
+	title!("predictions over ground truth")
+	xlabel!("x")
+	ylabel!("y")
+end
 
 ## Test specific data from above
-x = [0.01, 0.02, 0.03, 0.04,0.05,0.06,0.07,0.08] |> gpu
-y = [0.08, 0.09] |> gpu
-encoding = encoder_forward(x)
+# x = [0.01, 0.02, 0.03, 0.04,0.05,0.06,0.07,0.08] |> gpu
+# y = [0.08, 0.09] |> gpu
+# encoding = encoder_forward(x)
 
-prediction = decoder_forward(y, encoding) |> x->reshape(x,(2,1))
+# prediction = decoder_forward(y, encoding) |> x->reshape(x,(2,1))
 
-#loss(x, y, prediction |> x->reshape(x,(2,1)))
-label = [0.09, 0.10] |> gpu
-Flux.Losses.mse(label,prediction)
+# #loss(x, y, prediction |> x->reshape(x,(2,1)))
+# label = [0.09, 0.10] |> gpu
+# Flux.Losses.mse(label,prediction)
+
+## Predict iteratively
+begin
+	dataseq = data[1:24:end,:]'
+	x = dataseq[1:input_size] |> gpu
+	encoding = encoder_forward(x)
+	target = [x[end-decoder_input_size+1:end]...]
+	rg = 100
+	for i in 1:rg
+		y =  target[end-decoder_input_size+1:end] |> gpu
+		prediction = decoder_forward(y, encoding) # not working
+		append!(target, prediction[2])
+	end
+	@show target
+
+	dataseq = data[1:24:end,:]'
+	testdataseq = testdata[1:24:end,:]'
+
+	#plot(ground_truth_curve;label="ground truth")
+	plot(target, label="target", linewidth=2)
+	#plot!(dataseq;label="training data")
+	#plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
+	title!("iterative prediction over ground truth")
+	xlabel!("x")
+	ylabel!("y")
+end
