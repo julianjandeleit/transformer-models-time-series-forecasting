@@ -145,8 +145,8 @@ end
 begin
 	ground_truth_curve = Vector{Float64}()
 	for i in 1:500
-		# append!(ground_truth_curve,0.04*i+10)
-		append!(ground_truth_curve,sin(i))
+		append!(ground_truth_curve,0.04*i+10)
+		# append!(ground_truth_curve,sin(i))
 	end
 end
 
@@ -156,13 +156,14 @@ function normalize(data)
 	normalizer(x) = (x-dmin)/(dmax-dmin)
 	return normalizer.(data)
 end
-
+#generate_seq(sincurve1,enc_seq_len+output_sequence_length)
+ta = readtimearray("data/preprocessed/timeseries.csv", format="yyyy-mm-dd HH:MM:SS", delim=',')
+ta_mv = moving(mean,ta,15)
+ground_truth_curve = [ta_mv...] .|> x->x[2][1]
 ground_truth_curve = normalize(ground_truth_curve)
 
 @show length(ground_truth_curve)
 
-#generate_seq(sincurve1,enc_seq_len+output_sequence_length)
-#ta_mv = moving(mean,ta,15)
 
 batch_size = 32
 learning_rate = 1e-4
@@ -188,7 +189,7 @@ begin
 	@info "start training"
 	start_time = time()
 	l = 100
-	for i = 1:500 # num epochs (was 1000)
+	for i = 1:10 # num epochs (was 1000)
 		for x in train_loader
 			sz = size(x)
 			sub_sequence = reshape(x,(1,sz[1],sz[2]))
