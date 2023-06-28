@@ -1,5 +1,5 @@
 using Pkg
-Pkg.activate(temp=true)
+Pkg.activate(".")
 Pkg.add("Flux")
 Pkg.add("Transformers")
 Pkg.add("TensorBoardLogger")
@@ -138,6 +138,7 @@ function loss(src, trg, trg_y)
 	enc = encoder_forward(src)
 	enc = enc.hidden_state #|> x->reshape(x,(128,32))
 	dec = decoder_forward(trg, enc)
+
 	err = Flux.Losses.mse(dec,trg_y)
 	return err
 end
@@ -145,8 +146,8 @@ end
 begin
 	ground_truth_curve = Vector{Float64}()
 	for i in 1:500
-		append!(ground_truth_curve,0.04*i+10)
-		# append!(ground_truth_curve,sin(i))
+		# append!(ground_truth_curve,0.04*i+10)
+		append!(ground_truth_curve,sin(i*0.1))
 	end
 end
 
@@ -166,7 +167,7 @@ ground_truth_curve = normalize(ground_truth_curve)
 
 
 batch_size = 32
-learning_rate = 1e-4
+learning_rate = 1e-6#1e-4
 adam_betas = (0.9, 0.999)
 lg=TBLogger("tensorboard_logs/run", min_level=Logging.Info)
 # data = generate_seq(values(moving(mean,cl,15)),enc_seq_len+output_sequence_length)
@@ -191,7 +192,7 @@ begin
 	@info "start training"
 	start_time = time()
 	l = 100
-	for i = 1:5 # num epochs (was 1000)
+	for i = 1:100 # num epochs (was 1000)
 		for x in train_loader
 			sz = size(x)
 			sub_sequence = reshape(x,(1,sz[1],sz[2]))
@@ -201,12 +202,14 @@ begin
 							    decoder_input_size,
 							    output_sequence_length
 							    )
+			
 			src, trg, trg_y = todevice(src, trg, trg_y) #move to gpu
 			
 			# reshape because somehow model adds dimension at front
 			src = src |> x->reshape(x,(input_size,size(src)[3])) |> gpu
 			trg = trg |> x->reshape(x,(decoder_input_size,size(trg)[3])) |> gpu
 			trg_y = trg_y |> gpu
+			#@show src, trg, trg_y
 			grad = gradient(()->loss(src, trg, trg_y), ps)
 			Flux.update!(opt, ps, grad)
 			global l = collect(loss(src, trg, trg_y))[1]
@@ -261,8 +264,9 @@ begin
 	res_train = predict(data)
 	res_test = predict(testdata)
 	#plot(ground_truth_curve;label="ground truth")
-	plot(res_train, label="train prediction", linewidth=2)
-	plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), res_test;label="test prediction",linewidth=2)
+	pred_offset = input_size+decoder_input_size
+	plot(pred_offset+1:pred_offset+length(res_train),res_train, label="train prediction", linewidth=2)
+	plot!(pred_offset+length(dataseq)+1:pred_offset+length(dataseq)+length(testdataseq), res_test;label="test prediction",linewidth=2)
 	plot!(dataseq;label="training data")
 	plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
 	title!("predictions over ground truth")
