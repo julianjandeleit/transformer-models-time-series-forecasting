@@ -22,7 +22,6 @@ begin
 end
 ## 
 gpu_enabled = enable_gpu(true)
-ta = readtimearray("transformers_jl/rate.csv", format="mm/dd/yy", delim=',')
 ## 
 """
 Split sequence into feature and target and label parts
@@ -160,7 +159,7 @@ end
 #generate_seq(sincurve1,enc_seq_len+output_sequence_length)
 ta = readtimearray("data/preprocessed/timeseries.csv", format="yyyy-mm-dd HH:MM:SS", delim=',')
 ta_mv = moving(mean,ta,75)
-ground_truth_curve = [ta_mv...] .|> x->x[2][1]
+#ground_truth_curve = [ta_mv...] .|> x->x[2][1]
 ground_truth_curve = normalize(ground_truth_curve)
 
 @show length(ground_truth_curve)
@@ -172,7 +171,8 @@ adam_betas = (0.9, 0.999)
 lg=TBLogger("tensorboard_logs/run", min_level=Logging.Info)
 # data = generate_seq(values(moving(mean,cl,15)),enc_seq_len+output_sequence_length)
 # data = generate_seq(values(ta_mv[:"10 YR"]),enc_seq_len+output_sequence_length)
-data = generate_seq(ground_truth_curve,input_size+output_sequence_length)
+n_pred_iteration = 4 # how often the target prediction loop gets executed
+data = generate_seq(ground_truth_curve,input_size+n_pred_iteration*output_sequence_length)
 @show size(data)
 data = reduce(hcat,data)
 data = convert(Array{Float32,2}, data)
@@ -192,7 +192,7 @@ begin
 	@info "start training"
 	start_time = time()
 	l = 100
-	for i = 1:100 # num epochs (was 1000)
+	for i = 1:10 # num epochs (was 1000)
 		for x in train_loader
 			sz = size(x)
 			sub_sequence = reshape(x,(1,sz[1],sz[2]))
@@ -200,7 +200,7 @@ begin
 							    sub_sequence,
 							    input_size,
 							    decoder_input_size,
-							    output_sequence_length
+							    n_pred_iteration*output_sequence_length
 							    )
 			
 			src, trg, trg_y = todevice(src, trg, trg_y) #move to gpu
