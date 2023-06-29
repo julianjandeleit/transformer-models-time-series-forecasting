@@ -24,7 +24,7 @@ begin
 	#using MarketData
 end
 ## 
-gpu_enabled = enable_gpu(false)
+gpu_enabled = enable_gpu(true)
 ## 
 """
 Split sequence into feature and target and label parts
@@ -84,7 +84,7 @@ begin
 	#define 2 layer of transformer
 	input_size=16 # sequence length!
 	decoder_input_size = 8 # seq len!
-	num_layer = 4
+	num_layer = 3
 	hidden_size = 128 # encoding of encoder
 	num_head = 8
 	head_hidden_size = div(hidden_size, num_head)
@@ -152,7 +152,19 @@ function loss_shifted(src, trg)
 	enc = encoder_forward(src)
 	enc = enc.hidden_state
 	#@show src, trg
-	target_labels = vcat(src[end:end,:], trg[1:end-1,:])# shift by one to left
+	target_labels = vcat(src[end:end,:], trg[1:end-1,:]) # shift by one to left
+	dec = decoder_forward(target_labels, enc)
+	#@show dec |> size
+	dec = reshape(dec, (size(dec)[1], size(dec)[2]))
+	err = Flux.Losses.mse(dec,trg) # only trg, with unseen trg_y[end,:] gets predicted and evaluated
+	return err
+end
+
+function loss_shifted_old(src, trg)
+	enc = encoder_forward(src)
+	enc = enc.hidden_state
+	#@show src, trg
+	target_labels = vcat(src[end:end,:], trg[1:end-1,:]) # shift by one to left
 	dec = decoder_forward(target_labels, enc)
 	#@show dec |> size
 	dec = reshape(dec, (size(dec)[1], size(dec)[2]))
@@ -177,14 +189,14 @@ end
 #generate_seq(sincurve1,enc_seq_len+output_sequence_length)
 ta = readtimearray("data/preprocessed/timeseries.csv", format="yyyy-mm-dd HH:MM:SS", delim=',')
 ta_mv = moving(mean,ta,75)
-#ground_truth_curve = [ta_mv...] .|> x->x[2][1]
+ground_truth_curve = [ta_mv...] .|> x->x[2][1]
 ground_truth_curve = normalize(ground_truth_curve)
 
 @show length(ground_truth_curve)
 
 
-batch_size = 32
-learning_rate = 1e-6#1e-4
+batch_size = 2048
+learning_rate = 1e-4#1e-4
 adam_betas = (0.9, 0.999)
 lg=TBLogger("tensorboard_logs/run", min_level=Logging.Info)
 # data = generate_seq(values(moving(mean,cl,15)),enc_seq_len+output_sequence_length)
@@ -211,7 +223,7 @@ begin
 	@info "start training"
 	start_time = time()
 	l = 100
-	for i = 1:500 # num epochs (was 100 for transpiration, 1000 for sin)
+	for i = 1:100 # num epochs (was 100 for transpiration, 1000 for sin)
 		for x in train_loader
 			sz = size(x)
 			sub_sequence = reshape(x,(1,sz[1],sz[2]))
@@ -237,7 +249,7 @@ begin
 			global l = collect(loss_shifted(src, trg))[1]
 			append!(losses, l)
 			if l < best_loss
-				@info "best loss" l
+				#@info "best loss" l
 				global best_loss = l
 				global best_layers = all_layers |> deepcopy
 			end
@@ -253,7 +265,7 @@ begin
 				@info "train" loss=l log_step_increment=1
 			
 			end
-			@info "train" i loss=l log_step_increment=1 (time() - start_time)
+			@info "train" i loss=l log_step_increment=1 (time() - start_time) best_loss learning_rate
 		end
 		if l < 1e-3
 				continue
@@ -267,6 +279,7 @@ encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransfor
 function predict(test_data)
     seq = Array{Float32}[]
     test_loader = Flux.Data.DataLoader(test_data, batchsize=batch_size)
+	doshow=true
     for x in test_loader
 		sz = size(x)
         sub_sequence = reshape(x,(sz[1],sz[2]))
@@ -276,9 +289,18 @@ function predict(test_data)
         trg = ix[input_size:sz[1]-1,:]
         dec = decoder_forward(trg, enc)
         seq = vcat(seq,collect(dec[end,:]))
+		if doshow==true
+			doshow=false
+			#@show ix[1:input_size,:]
+			ix=ix[1:input_size,1:1]
+			trg=trg[:,1:1]
+			dec=dec[:,1:1]
+			@show ix trg dec seq
+		end
     end
     return seq
 end
+
 begin
 	dataseq = data[1:24:end,:]'
 	testdataseq = testdata[1:24:end,:]'
@@ -308,29 +330,31 @@ end
 
 ## Predict iteratively
 begin
-	startindex = 25
+	startindex = 1
 	dataseq = collect(data[1:24:end,:]')[startindex:end]
 	x = dataseq[1:input_size] |> todevice
 	encoding = encoder_forward(x)
 	target = [ dataseq[input_size+1:input_size+1decoder_input_size]...]
-	rg = 5
+	rg = 20
 	for i in 1:rg
 		y =  target[end-decoder_input_size+1:end] |> todevice
 		prediction = decoder_forward(y, encoding) # not working
 		append!(target, prediction[end,1,1]) # dims 2,3 empty
 	end
-	#@show target
+	# @show target
+	target = target[decoder_input_size+1:end]
+
 
 	dataseq = data[1:24:end,:]'
 	testdataseq = testdata[1:24:end,:]'
 
 	#plot(ground_truth_curve;label="ground truth")
 	plot(startindex:startindex+length(x)-1,[x],linewidth=5)
-	plot!(length(x)+startindex:startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
-	plot!(dataseq)
+	plot!(length(x)+startindex+decoder_input_size:decoder_input_size+startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
+	plot!(dataseq[1:1000])
 	#plot!(dataseq;label="training data")
 	#plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
-	title!("iterative prediction over ground truth (reencoded)")
+	title!("iterative prediction over ground truth")
 	xlabel!("x")
 	ylabel!("y")
 end
@@ -342,27 +366,39 @@ begin
 	x = dataseq[1:input_size] |> todevice
 	encoding = encoder_forward(x)
 	target = [ dataseq[input_size+1:input_size+1decoder_input_size]...]
-	target = [x; target]
-	rg = 10
+	base = [x; target]
+	@show target = [base...]
+	rg = 20
 	for i in 1:rg
-		x = target[end-decoder_input_size-input_size+1:end-decoder_input_size]
-		encoding = encoder_forward(x).hidden_state
-		y = target[end-decoder_input_size+1:end] |> todevice
-		prediction = decoder_forward(y, encoding) # not working
+		src = target[end-input_size-decoder_input_size+1:end-decoder_input_size]
+		x = target[end-decoder_input_size+1:end]
+		encoding = encoder_forward(src |> todevice).hidden_state
+		#y = target[end-decoder_input_size+1:end] |> todevice
+		prediction = decoder_forward(x |> todevice, encoding |> todevice) # not working
+
 		append!(target, prediction[end,1,1]) # dims 2,3 empty
 	end
 	#@show target
-
-	dataseq = data[1:24:end,:]'
-	testdataseq = testdata[1:24:end,:]'
+	#target = target[length(base)+1:end] # remove base for visualization
 
 	#plot(ground_truth_curve;label="ground truth")
-	plot(startindex:startindex+length(x)-1,[x],linewidth=5)
-	plot!(length(x)+startindex:startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
-	plot!(dataseq)
+	#plot(startindex:startindex+length(x)-1,[x],linewidth=5)
+	#plot!(length(x)+startindex:startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
+	plot(dataseq[1:200])
+	plot!(base)
+	plot!(length(base)+1:length(base)+length(target),target)
 	#plot!(dataseq;label="training data")
 	#plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
 	title!("iterative prediction over ground truth (reencoded)")
 	xlabel!("x")
 	ylabel!("y")
 end
+
+## show losses
+#plot(losses, thickness_scaling=2,size=(2500,2500))
+
+plot(titlefontsize=40, tickfontsize=40, legendfontsize=40, guidefontsize=40)
+plot!(losses, linewidth=2,size=(1000,1000))
+xlabel!("test")
+ylabel!("testy")
+title!("title")
