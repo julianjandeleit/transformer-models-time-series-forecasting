@@ -5,6 +5,9 @@ Pkg.add("Transformers")
 Pkg.add("TensorBoardLogger")
 Pkg.add("CUDA")
 Pkg.add("Plots")
+Pkg.add("TimeSeries")
+Pkg.add("BSON")
+# NOTE: potentially build cuda first
 ## 
 begin
 	using Flux
@@ -21,7 +24,7 @@ begin
 	#using MarketData
 end
 ## 
-gpu_enabled = enable_gpu(true)
+gpu_enabled = enable_gpu(false)
 ## 
 """
 Split sequence into feature and target and label parts
@@ -47,6 +50,18 @@ function get_src_trg(
 	end
 end
 
+"""
+with iterative predictions
+"""
+function get_src_trg_shifted(
+    sequence, 
+    enc_seq_len,
+)
+	src = sequence[1,1:enc_seq_len, :]
+	trg = sequence[1,enc_seq_len+1:end, :]
+	return src, trg
+end
+
 # begin
 # 	## Model parameters
 # 	dim_val = 512 # This can be any value. 512 is used in the original transformer paper.
@@ -69,7 +84,7 @@ begin
 	#define 2 layer of transformer
 	input_size=16 # sequence length!
 	decoder_input_size = 8 # seq len!
-	num_layer = 8
+	num_layer = 4
 	hidden_size = 128 # encoding of encoder
 	num_head = 8
 	head_hidden_size = div(hidden_size, num_head)
@@ -77,22 +92,22 @@ begin
 	output_sequence_length = 8
 	# define two layer input
 	encoderTransformerLayers = Transformer(Layers.TransformerBlock,
-		num_layer, relu, num_head, hidden_size, head_hidden_size, intermediate_size, return_score=true)|> gpu
+		num_layer, relu, num_head, hidden_size, head_hidden_size, intermediate_size, return_score=true)|> todevice
 	#define 2 layer of transformer decoder
 	decoderTransformerLayers = Transformer(Layers.TransformerDecoderBlock,
 	num_layer, relu, num_head, hidden_size, head_hidden_size, intermediate_size;
-	return_score = true) |> gpu
+	return_score = true) |> todevice
 	
 	
-	encoder_input_layer = Dense(input_size,hidden_size) |> gpu
-	decoder_input_layer = Dense(decoder_input_size,hidden_size) |> gpu
-	positional_encoding_layer = Layers.SinCosPositionEmbed(hidden_size) |> gpu
+	encoder_input_layer = Dense(input_size,hidden_size) |> todevice
+	decoder_input_layer = Dense(decoder_input_size,hidden_size) |> todevice
+	positional_encoding_layer = Layers.SinCosPositionEmbed(hidden_size) |> todevice
 	p = 0.2
-	dropout_pos_enc = Dropout(p) |> gpu
+	dropout_pos_enc = Dropout(p) |> todevice
 	
 	#define the layer to get the final output probabilities
 	#linear = Positionwise(Dense(dim_val, output_sequence_length))
-	linear = Dense(hidden_size,output_sequence_length) |> gpu
+	linear = Dense(hidden_size,output_sequence_length) |> todevice
 	function encoder_forward(x)
 	  x = encoder_input_layer(x)
 	  e = positional_encoding_layer(x)
@@ -113,8 +128,8 @@ begin
 	  return p
 	end
 end
-# #x = [1, 2, 3, 4, 5, 6, 7, 8] |> gpu
-# y = [9, 10] |> gpu
+# #x = [1, 2, 3, 4, 5, 6, 7, 8] |> todevice
+# y = [9, 10] |> todevice
 # encoding = encoder_forward(x)
 
 # prediction = decoder_forward(y, encoding)
@@ -133,12 +148,15 @@ function generate_seq(x, seq_len)
 	return result
 end
 
-function loss(src, trg, trg_y)
+function loss_shifted(src, trg)
 	enc = encoder_forward(src)
-	enc = enc.hidden_state #|> x->reshape(x,(128,32))
-	dec = decoder_forward(trg, enc)
-
-	err = Flux.Losses.mse(dec,trg_y)
+	enc = enc.hidden_state
+	#@show src, trg
+	target_labels = vcat(src[end:end,:], trg[1:end-1,:])# shift by one to left
+	dec = decoder_forward(target_labels, enc)
+	#@show dec |> size
+	dec = reshape(dec, (size(dec)[1], size(dec)[2]))
+	err = Flux.Losses.mse(dec,trg) # only trg, with unseen trg_y[end,:] gets predicted and evaluated
 	return err
 end
 
@@ -171,8 +189,8 @@ adam_betas = (0.9, 0.999)
 lg=TBLogger("tensorboard_logs/run", min_level=Logging.Info)
 # data = generate_seq(values(moving(mean,cl,15)),enc_seq_len+output_sequence_length)
 # data = generate_seq(values(ta_mv[:"10 YR"]),enc_seq_len+output_sequence_length)
-n_pred_iteration = 4 # how often the target prediction loop gets executed
-data = generate_seq(ground_truth_curve,input_size+n_pred_iteration*output_sequence_length)
+#data = generate_seq(ground_truth_curve,input_size+n_pred_iteration*output_sequence_length)
+data = generate_seq(ground_truth_curve,input_size+output_sequence_length)
 @show size(data)
 data = reduce(hcat,data)
 data = convert(Array{Float32,2}, data)
@@ -184,6 +202,7 @@ data = data[:,1:thd]
 ## Training
 best_layers = []
 best_loss = 1e10
+losses = []
 begin
 	ps = Flux.params(encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear)
 	all_layers = [ encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear ]
@@ -192,27 +211,31 @@ begin
 	@info "start training"
 	start_time = time()
 	l = 100
-	for i = 1:10 # num epochs (was 1000)
+	for i = 1:500 # num epochs (was 100 for transpiration, 1000 for sin)
 		for x in train_loader
 			sz = size(x)
 			sub_sequence = reshape(x,(1,sz[1],sz[2]))
-		   	src, trg, trg_y = get_src_trg(
-							    sub_sequence,
-							    input_size,
-							    decoder_input_size,
-							    n_pred_iteration*output_sequence_length
-							    )
+		   	# src, trg, trg_y = get_src_trg(
+			# 				    sub_sequence,
+			# 				    input_size,
+			# 				    decoder_input_size,
+			# 				    n_pred_iteration*output_sequence_length
+			# 				    )
 			
-			src, trg, trg_y = todevice(src, trg, trg_y) #move to gpu
-			
+			# src, trg, trg_y = todevice(src, trg, trg_y) #move to gpu
+			# @show src, trg, trg_y
 			# reshape because somehow model adds dimension at front
-			src = src |> x->reshape(x,(input_size,size(src)[3])) |> gpu
-			trg = trg |> x->reshape(x,(decoder_input_size,size(trg)[3])) |> gpu
-			trg_y = trg_y |> gpu
+			src, trg = get_src_trg_shifted(sub_sequence, input_size) |> todevice
+			#@show src, trg
+			#src = src |> x->reshape(x,(input_size,size(src)[3])) |> todevice
+			#trg = trg |> x->reshape(x,(decoder_input_size,size(trg)[3])) |> todevice
+			#trg_y = trg_y |> todevice
+			#@show src |> size, trg |> size
 			#@show src, trg, trg_y
-			grad = gradient(()->loss(src, trg, trg_y), ps)
+			grad = gradient(()->loss_shifted(src, trg), ps)
 			Flux.update!(opt, ps, grad)
-			global l = collect(loss(src, trg, trg_y))[1]
+			global l = collect(loss_shifted(src, trg))[1]
+			append!(losses, l)
 			if l < best_loss
 				@info "best loss" l
 				global best_loss = l
@@ -256,8 +279,6 @@ function predict(test_data)
     end
     return seq
 end
-
-
 begin
 	dataseq = data[1:24:end,:]'
 	testdataseq = testdata[1:24:end,:]'
@@ -275,38 +296,73 @@ begin
 end
 
 ## Test specific data from above
-# x = [0.01, 0.02, 0.03, 0.04,0.05,0.06,0.07,0.08] |> gpu
-# y = [0.08, 0.09] |> gpu
+# x = [0.01, 0.02, 0.03, 0.04,0.05,0.06,0.07,0.08] |> todevice
+# y = [0.08, 0.09] |> todevice
 # encoding = encoder_forward(x)
 
 # prediction = decoder_forward(y, encoding) |> x->reshape(x,(2,1))
 
 # #loss(x, y, prediction |> x->reshape(x,(2,1)))
-# label = [0.09, 0.10] |> gpu
+# label = [0.09, 0.10] |> todevice
 # Flux.Losses.mse(label,prediction)
 
 ## Predict iteratively
 begin
-	dataseq = data[1:24:end,:]'
-	x = dataseq[1:input_size] |> gpu
+	startindex = 25
+	dataseq = collect(data[1:24:end,:]')[startindex:end]
+	x = dataseq[1:input_size] |> todevice
 	encoding = encoder_forward(x)
-	target = [x[end-decoder_input_size+1:end]...]
-	rg = 100
+	target = [ dataseq[input_size+1:input_size+1decoder_input_size]...]
+	rg = 5
 	for i in 1:rg
-		y =  target[end-decoder_input_size+1:end] |> gpu
+		y =  target[end-decoder_input_size+1:end] |> todevice
 		prediction = decoder_forward(y, encoding) # not working
-		append!(target, prediction[2])
+		append!(target, prediction[end,1,1]) # dims 2,3 empty
 	end
-	@show target
+	#@show target
 
 	dataseq = data[1:24:end,:]'
 	testdataseq = testdata[1:24:end,:]'
 
 	#plot(ground_truth_curve;label="ground truth")
-	plot(target, label="target", linewidth=2)
+	plot(startindex:startindex+length(x)-1,[x],linewidth=5)
+	plot!(length(x)+startindex:startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
+	plot!(dataseq)
 	#plot!(dataseq;label="training data")
 	#plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
-	title!("iterative prediction over ground truth")
+	title!("iterative prediction over ground truth (reencoded)")
+	xlabel!("x")
+	ylabel!("y")
+end
+
+## Predict iteratively with reencoding
+begin
+	startindex = 1
+	dataseq = collect(data[1:24:end,:]')[startindex:end]
+	x = dataseq[1:input_size] |> todevice
+	encoding = encoder_forward(x)
+	target = [ dataseq[input_size+1:input_size+1decoder_input_size]...]
+	target = [x; target]
+	rg = 10
+	for i in 1:rg
+		x = target[end-decoder_input_size-input_size+1:end-decoder_input_size]
+		encoding = encoder_forward(x).hidden_state
+		y = target[end-decoder_input_size+1:end] |> todevice
+		prediction = decoder_forward(y, encoding) # not working
+		append!(target, prediction[end,1,1]) # dims 2,3 empty
+	end
+	#@show target
+
+	dataseq = data[1:24:end,:]'
+	testdataseq = testdata[1:24:end,:]'
+
+	#plot(ground_truth_curve;label="ground truth")
+	plot(startindex:startindex+length(x)-1,[x],linewidth=5)
+	plot!(length(x)+startindex:startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
+	plot!(dataseq)
+	#plot!(dataseq;label="training data")
+	#plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
+	title!("iterative prediction over ground truth (reencoded)")
 	xlabel!("x")
 	ylabel!("y")
 end

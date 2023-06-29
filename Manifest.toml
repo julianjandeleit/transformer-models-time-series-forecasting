@@ -2,7 +2,7 @@
 
 julia_version = "1.9.0"
 manifest_format = "2.0"
-project_hash = "529d97766c6e79e2f1fb438554e22b60c8c04cb7"
+project_hash = "5e00b4b1a2130f7aac15c8bf8779541618fc5acb"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -47,6 +47,11 @@ deps = ["LinearAlgebra", "Printf", "Random", "Test"]
 git-tree-sha1 = "dbf84058d0a8cbbadee18d25cf606934b22d7c66"
 uuid = "ab4f0b2a-ad5b-11e8-123f-65d77653426b"
 version = "0.4.2"
+
+[[deps.BSON]]
+git-tree-sha1 = "2208958832d6e1b59e49f53697483a84ca8d664e"
+uuid = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
+version = "0.3.7"
 
 [[deps.BangBang]]
 deps = ["Compat", "ConstructionBase", "InitialValues", "LinearAlgebra", "Requires", "Setfield", "Tables"]
@@ -1337,6 +1342,12 @@ deps = ["FuncPipelines", "PartialFunctions", "PrimitiveOneHot", "StaticArrays", 
 git-tree-sha1 = "1304ca2c65d9b28c1e2a78cdf5032348c0c405e5"
 uuid = "f92c20c0-9f2a-4705-8116-881385faba05"
 version = "0.6.0"
+
+[[deps.TimeSeries]]
+deps = ["Dates", "DelimitedFiles", "DocStringExtensions", "RecipesBase", "Reexport", "Statistics", "Tables"]
+git-tree-sha1 = "8b9288d84da88ea44693ca8cf9c236da1778f274"
+uuid = "9e3dc215-6440-5c97-bce1-76c03772f85e"
+version = "0.23.2"
 
 [[deps.TimerOutputs]]
 deps = ["ExprTools", "Printf"]
