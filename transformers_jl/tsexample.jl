@@ -335,14 +335,14 @@ begin
 	res_test = predict(testdata)
 	#plot(ground_truth_curve;label="ground truth")
 	pred_offset = input_size+decoder_input_size
-	plot(pred_offset+1:pred_offset+length(res_train),res_train, label="train prediction", linewidth=2)
+	plot(pred_offset+1:pred_offset+length(res_train),res_train, label="train prediction", linewidth=2, dpi=300)
 	plot!(pred_offset+length(dataseq)+1:pred_offset+length(dataseq)+length(testdataseq), res_test;label="test prediction",linewidth=2)
 	plot!(dataseq;label="training data")
 	plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
 	title!("predictions over ground truth")
 	xlabel!("time")
 	ylabel!("normalized transpiration") |> display
-
+	savefig("data/experiment/predictions_over_gt.png")
 
 	train_errors = dataseq .- res_train .|> abs |> x->[x...]
 	@show train_errors |> median
@@ -350,10 +350,11 @@ begin
 	test_errors = testdataseq .- res_test .|> abs |> x->[x...]
 	@show test_errors |> median
 	test_labels = ["test errors" for i = 1:length(train_errors)]
-	boxplot([train_labels; test_labels], [train_errors; test_errors],outliers=false, label=false)
+	boxplot([train_labels; test_labels], [train_errors; test_errors],outliers=false, label=false, dpi=300)
 	# boxplot(errors, outliers=false, label="", whisker_width=:half, xaxis=false)
 	ylabel!("absolute error")
 	title!("prediction errors")
+	savefig("data/experiment/prediction_errors.png")
 end
 
 
@@ -382,6 +383,7 @@ begin
 	plot(startindex:startindex+length(x)-1,[x],linewidth=5)
 	plot!(length(x)+startindex+decoder_input_size:decoder_input_size+startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
 	plot!(dataseq[1:1000])
+	
 	#plot!(dataseq;label="training data")
 	#plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
 	title!("iterative prediction over ground truth")
