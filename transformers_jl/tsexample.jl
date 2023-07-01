@@ -7,6 +7,8 @@ Pkg.add("CUDA")
 Pkg.add("Plots")
 Pkg.add("TimeSeries")
 Pkg.add("BSON")
+Pkg.add("StatsPlots")
+Pkg.add("DataFrames")
 # NOTE: potentially build cuda first
 ## 
 begin
@@ -16,11 +18,13 @@ begin
 	using Flux
 	using Flux: gradient
 	using Flux.Optimise: update!
-	using BSON: @save
+	using BSON: @save, @load
 	using TensorBoardLogger, Logging
 	using CUDA
 	using Statistics
 	using Plots
+	using StatsPlots
+	using DataFrames
 	#using MarketData
 end
 ## 
@@ -272,9 +276,32 @@ begin
 		end
 	end
 end
+
+
+## Save data
+encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear = best_layers
+
+for (j,layer) in enumerate(best_layers)
+	_layer = layer |> cpu
+	@save joinpath("data/experiment/layer$j.bson") _layer
+end
+
+@save joinpath("data/experiment/losses.bson") losses
+
+## Load best model
+
+loaded_layers = []
+for i = 1:7
+	@load "data/experiment/layer$i.bson" _layer
+	push!(loaded_layers, _layer |> todevice)
+end
+@load "data/experiment/losses.bson" losses
+
+encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear = loaded_layers
+
 ## Test predictions
 
-encoder_input_layer, positional_encoding_layer, dropout_pos_enc, encoderTransformerLayers, decoder_input_layer, decoderTransformerLayers, linear = best_layers
+
 
 function predict(test_data)
     seq = Array{Float32}[]
@@ -295,7 +322,7 @@ function predict(test_data)
 			ix=ix[1:input_size,1:1]
 			trg=trg[:,1:1]
 			dec=dec[:,1:1]
-			@show ix trg dec seq
+			#@show ix trg dec seq
 		end
     end
     return seq
@@ -313,20 +340,23 @@ begin
 	plot!(dataseq;label="training data")
 	plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
 	title!("predictions over ground truth")
-	xlabel!("x")
-	ylabel!("y")
+	xlabel!("time")
+	ylabel!("normalized transpiration") |> display
+
+
+	train_errors = dataseq .- res_train .|> abs |> x->[x...]
+	@show train_errors |> median
+	train_labels = ["train errors" for i = 1:length(train_errors)]
+	test_errors = testdataseq .- res_test .|> abs |> x->[x...]
+	@show test_errors |> median
+	test_labels = ["test errors" for i = 1:length(train_errors)]
+	boxplot([train_labels; test_labels], [train_errors; test_errors],outliers=false, label=false)
+	# boxplot(errors, outliers=false, label="", whisker_width=:half, xaxis=false)
+	ylabel!("absolute error")
+	title!("prediction errors")
 end
 
-## Test specific data from above
-# x = [0.01, 0.02, 0.03, 0.04,0.05,0.06,0.07,0.08] |> todevice
-# y = [0.08, 0.09] |> todevice
-# encoding = encoder_forward(x)
 
-# prediction = decoder_forward(y, encoding) |> x->reshape(x,(2,1))
-
-# #loss(x, y, prediction |> x->reshape(x,(2,1)))
-# label = [0.09, 0.10] |> todevice
-# Flux.Losses.mse(label,prediction)
 
 ## Predict iteratively
 begin
