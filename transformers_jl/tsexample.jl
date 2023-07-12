@@ -1,14 +1,14 @@
-using Pkg
-Pkg.activate(".")
-Pkg.add("Flux")
-Pkg.add("Transformers")
-Pkg.add("TensorBoardLogger")
-Pkg.add("CUDA")
-Pkg.add("Plots")
-Pkg.add("TimeSeries")
-Pkg.add("BSON")
-Pkg.add("StatsPlots")
-Pkg.add("DataFrames")
+# using Pkg
+# Pkg.activate(".")
+# Pkg.add("Flux")
+# Pkg.add(PackageSpec(name="Transformers", version=v"0.2.6"))
+# Pkg.add("TensorBoardLogger")
+# Pkg.add("CUDA")
+# Pkg.add("Plots")
+# Pkg.add("TimeSeries")
+# Pkg.add("BSON")
+# Pkg.add("StatsPlots")
+# Pkg.add("DataFrames")
 # NOTE: potentially build cuda first
 ## 
 begin
@@ -25,6 +25,8 @@ begin
 	using Plots
 	using StatsPlots
 	using DataFrames
+	using DelimitedFiles
+	using Interpolations: linear_interpolation
 	#using MarketData
 end
 ## 
@@ -86,14 +88,14 @@ end
 
 begin
 	#define 2 layer of transformer
-	input_size=16 # sequence length!
-	decoder_input_size = 8 # seq len!
+	input_size=4 # sequence length!
+	decoder_input_size = 4 # seq len!
 	num_layer = 3
 	hidden_size = 128 # encoding of encoder
 	num_head = 8
 	head_hidden_size = div(hidden_size, num_head)
 	intermediate_size = 4hidden_size
-	output_sequence_length = 8
+	output_sequence_length = 4
 	# define two layer input
 	encoderTransformerLayers = Transformer(Layers.TransformerBlock,
 		num_layer, relu, num_head, hidden_size, head_hidden_size, intermediate_size, return_score=true)|> todevice
@@ -191,17 +193,45 @@ function normalize(data)
 	return normalizer.(data)
 end
 #generate_seq(sincurve1,enc_seq_len+output_sequence_length)
-ta = readtimearray("data/preprocessed/timeseries.csv", format="yyyy-mm-dd HH:MM:SS", delim=',')
-ta_mv = moving(mean,ta,75)
+#ta = readtimearray("data/preprocessed/timeseries.csv", format="yyyy-mm-dd HH:MM:SS", delim=','); # NOTE: ignore printing error...
+data, header = readdlm("data/preprocessed/timeseries.csv", ',', header = true) # somehow readtimearray not working
+ta = TimeArray(data[:,1] .|> Int .|> string .|> x-> DateTime(x, "yyyy"), data[:,2]);
+
+
+# reindex data 
+df = DataFrame(ta)
+li = linear_interpolation(df[:,1] .|> year .|> Float32, df[:,2])
+start_year = df[1,1] |> year
+end_year = df[end,1] |> year
+
+keys = start_year:0.01:end_year
+values = keys |> li
+
+using Dates
+function partial_year(period::Type{<:Period}, float::AbstractFloat)
+    _year, Δ = divrem(float, 1)
+    year_start = DateTime(_year)
+    year = period((year_start + Year(1)) - year_start)
+    partial = period(round(Dates.value(year) * Δ))
+    year_start + partial
+end
+partial_year(float::AbstractFloat) = partial_year(Hour, float) # precision up to day
+
+keys = keys .|> partial_year # convert to datetime
+ta = TimeArray(keys, values)
+
+#ta_mv = ta
+ta_mv = moving(mean,ta,1);
 ground_truth_curve = [ta_mv...] .|> x->x[2][1]
 ground_truth_curve = normalize(ground_truth_curve)
 
 @show length(ground_truth_curve)
 
 
-batch_size = 2048
-learning_rate = 1e-4#1e-4
+batch_size = 1
+learning_rate = 1e-7#1e-4
 adam_betas = (0.9, 0.999)
+epochs = 10
 lg=TBLogger("tensorboard_logs/run", min_level=Logging.Info)
 # data = generate_seq(values(moving(mean,cl,15)),enc_seq_len+output_sequence_length)
 # data = generate_seq(values(ta_mv[:"10 YR"]),enc_seq_len+output_sequence_length)
@@ -227,7 +257,7 @@ begin
 	@info "start training"
 	start_time = time()
 	l = 100
-	for i = 1:100 # num epochs (was 100 for transpiration, 1000 for sin)
+	for i = 1:epochs # num epochs (was 100 for transpiration, 1000 for sin)
 		for x in train_loader
 			sz = size(x)
 			sub_sequence = reshape(x,(1,sz[1],sz[2]))
@@ -382,7 +412,7 @@ begin
 	#plot(ground_truth_curve;label="ground truth")
 	plot(startindex:startindex+length(x)-1,[x],linewidth=5)
 	plot!(length(x)+startindex+decoder_input_size:decoder_input_size+startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
-	plot!(dataseq[1:1000])
+	plot!(dataseq[1:4])
 	
 	#plot!(dataseq;label="training data")
 	#plot!(length(dataseq)+1:length(dataseq)+length(testdataseq), testdataseq;label="test data")
@@ -416,7 +446,7 @@ begin
 	#plot(ground_truth_curve;label="ground truth")
 	#plot(startindex:startindex+length(x)-1,[x],linewidth=5)
 	#plot!(length(x)+startindex:startindex+length(x)+length(target)-1,target, label="target", linewidth=5)
-	plot(dataseq[1:200])
+	plot(dataseq[1:6])
 	plot!(base)
 	plot!(length(base)+1:length(base)+length(target),target)
 	#plot!(dataseq;label="training data")
